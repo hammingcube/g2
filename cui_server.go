@@ -7,6 +7,7 @@ import (
 	"github.com/google/go-github/github"
 	"github.com/gorilla/schema"
 	"github.com/labstack/echo"
+	"github.com/labstack/echo/engine/standard"
 	mw "github.com/labstack/echo/middleware"
 	"github.com/labstack/gommon/log"
 	"github.com/maddyonline/code"
@@ -80,12 +81,16 @@ type (
 )
 
 // Render HTML
-func (t *Template) Render(w io.Writer, name string, data interface{}) error {
+// func (t *Template) Render(w io.Writer, name string, data interface{}) error {
+// 	return t.templates.ExecuteTemplate(w, name, data)
+// }
+
+func (t *Template) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
 	return t.templates.ExecuteTemplate(w, name, data)
 }
 
 // Handler
-func hello(c *echo.Context) error {
+func hello(c echo.Context) error {
 	return c.String(http.StatusOK, "Hello, World!\n")
 }
 
@@ -113,13 +118,13 @@ func getTmpWorkDir() (string, error) {
 	return utils.CreateDirIfReqd(filepath.Join(u.HomeDir, "goonj-workdir"))
 }
 
-func saveSolution(c *echo.Context) (*cui.Task, *cui.SolutionRequest) {
+func saveSolution(c echo.Context) (*cui.Task, *cui.SolutionRequest) {
 	solnReq := &cui.SolutionRequest{
-		Ticket:    c.Form("ticket"),
-		Task:      c.Form("task"),
-		ProgLang:  c.Form("prg_lang"),
-		Solution:  c.Form("solution"),
-		TestData0: c.Form("test_data0"),
+		Ticket:    c.FormValue("ticket"),
+		Task:      c.FormValue("task"),
+		ProgLang:  c.FormValue("prg_lang"),
+		Solution:  c.FormValue("solution"),
+		TestData0: c.FormValue("test_data0"),
 	}
 	log.Info("%s %s: Form: %#v", c.Request().Method, c.Request().URL, solnReq)
 	task, ok := tasks[cui.TaskKey{solnReq.Ticket, solnReq.Task}]
@@ -159,73 +164,77 @@ func saveSolution(c *echo.Context) (*cui.Task, *cui.SolutionRequest) {
 
 func addCuiHandlers(e *echo.Echo) {
 	c := e.Group("/c")
-	c.Post("/_start", func(c *echo.Context) error {
-		session, ok := cuiSessions[c.Form("ticket")]
+	c.Post("/_start", func(c echo.Context) error {
+		session, ok := cuiSessions[c.FormValue("ticket")]
 		if !ok {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Attempt to start an invalid session")
 		}
 		session.StartTime = time.Now()
 		return c.String(http.StatusOK, "Started")
 	})
-	c.Post("/_get_task", func(c *echo.Context) error {
+	c.Post("/_get_task", func(c echo.Context) error {
 		msg := &cui.MessageGetTask{
-			Task:                 c.Form("task"),
-			Ticket:               c.Form("ticket"),
-			ProgLang:             c.Form("prg_lang"),
-			HumanLang:            c.Form("human_lang"),
-			PreferServerProgLang: c.Form("prefer_server_prg_lang") == "false",
+			Task:                 c.FormValue("task"),
+			Ticket:               c.FormValue("ticket"),
+			ProgLang:             c.FormValue("prg_lang"),
+			HumanLang:            c.FormValue("human_lang"),
+			PreferServerProgLang: c.FormValue("prefer_server_prg_lang") == "false",
 		}
 		return c.XML(http.StatusOK, cui.GetTask(tasks, msg))
 	})
-	c.Get("/close/:ticket_id", func(c *echo.Context) error {
+	c.Get("/close/:ticket_id", func(c echo.Context) error {
 		log.Info("Params: ->%s<-, ->%s<-", c.P(0), c.P(1))
 		return c.Redirect(http.StatusTemporaryRedirect, "/")
 	})
 
 	chk := e.Group("/chk")
-	chk.Post("/clock", func(c *echo.Context) error {
-		c.Request().ParseForm()
+	chk.Post("/clock", func(c echo.Context) error {
 		clkReq := &cui.ClockRequest{}
-		schemaDecoder.Decode(clkReq, c.Request().Form)
-		log.Info("Clock Request: %v", clkReq)
+		if err := c.Bind(clkReq); err != nil {
+			return err
+		}
+		// c.Request().P
+		// clkReq := &cui.ClockRequest{}
+		// schemaDecoder.Decode(clkReq, c.Request().Form)
+		log.Info(fmt.Sprintf("Clock Request: %v", clkReq))
 		oldlimit := time.Duration(clkReq.OldTimeLimit) * time.Second
 		resp := cui.GetClock(cuiSessions, clkReq)
 		newlimit := time.Duration(resp.NewTimeLimit) * time.Second
-		log.Info("Clock Request: OldLimit=%s", oldlimit)
-		log.Info("Clock Response: NewLimit=%s", newlimit)
+		log.Info(fmt.Sprintf("Clock Request: OldLimit=%s", oldlimit))
+		log.Info(fmt.Sprintf("Clock Response: NewLimit=%s", newlimit))
 		return c.XML(http.StatusOK, resp)
 	})
 
-	chk.Post("/save", func(c *echo.Context) error {
+	chk.Post("/save", func(c echo.Context) error {
 		saveSolution(c)
 		return c.String(http.StatusOK, "Finished saving")
 	})
 
-	chk.Post("/verify", func(c *echo.Context) error {
-		c.Form("task")
-		log.Info("/verify: %#v", c.Request().Form)
+	chk.Post("/verify", func(c echo.Context) error {
+		c.Request().FormValue("task")
+		//log.Info("/verify: %#v", c.Request().Form)
 		task, solnReq := saveSolution(c)
 		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, task, solnReq, cui.VERIFY))
 	})
 
-	chk.Post("/judge", func(c *echo.Context) error {
-		c.Form("task")
-		log.Info("/judge: %#v", c.Request().Form)
+	chk.Post("/judge", func(c echo.Context) error {
+		c.FormValue("task")
+		//log.Info("/judge: %#v", c.Request().Form)
 		task, solnReq := saveSolution(c)
 		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, task, solnReq, cui.JUDGE))
 	})
 
-	chk.Post("/final", func(c *echo.Context) error {
+	chk.Post("/final", func(c echo.Context) error {
 		log.Info("In /final")
-		c.Form("task")
-		log.Info("/final: %#v", c.Request().Form)
+		c.FormValue("task")
+		//log.Info("/final: %#v", c.Request().Form)
 		task, solnReq := saveSolution(c)
 		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, task, solnReq, cui.FINAL))
 	})
 
-	chk.Post("/status", func(c *echo.Context) error {
-		c.Form("task")
-		log.Info("/status: %#v", c.Request().Form)
+	chk.Post("/status", func(c echo.Context) error {
+		c.FormValue("task")
+		//log.Info("/status: %#v", c.Request().Form)
 		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, nil, nil, cui.VERIFY))
 	})
 }
@@ -304,34 +313,30 @@ func main() {
 	port := Opts.Port
 	staticDir := filepath.Join(Opts.StaticFilesRoot, "static_cui/cui/static/cui")
 	templatesDir := filepath.Join(Opts.StaticFilesRoot, "static_cui/cui/templates")
-	log.Info("Using Port=%s", port)
-	log.Info("Using Static Directory=%s", staticDir)
-	log.Info("Using Templates Directory=%s", templatesDir)
-	log.Info("Using runner=%s", Opts.RunnerPath)
+	log.Info(fmt.Sprintf("Using Port=%s", port))
+	log.Info(fmt.Sprintf("Using Static Directory=%s", staticDir))
+	log.Info(fmt.Sprintf("Using Templates Directory=%s", templatesDir))
+	log.Info(fmt.Sprintf("Using runner=%s", Opts.RunnerPath))
 
 	runner = code.NewRunner(Opts.RunnerPath)
 
 	env, err := readDotEnv(Opts.StaticFilesRoot)
 	if err != nil {
-		log.Fatal("Got error while reading dotenv: %v", err)
+		log.Fatal(fmt.Sprintf("Got error while reading dotenv: %v", err))
 		return
 	} else {
-		log.Info("Read env: %s", env)
+		log.Info(fmt.Sprintf("Read env: %s", env))
 	}
 	THINK_GISTS_KEY, ok := env["THINK_GISTS_KEY"]
 	if !ok {
-		log.Fatal("Need github secret to proceed")
+		log.Fatal(fmt.Sprintf("Need github secret to proceed"))
 		return
 	}
 	AUTH0_TOKEN, ok := env["AUTH0_TOKEN"]
 	if !ok {
-		log.Fatal("Need AUTH0 token to proceed")
+		log.Fatal(fmt.Sprintf("Need AUTH0 token to proceed"))
 		return
 	}
-
-	//initializeGitClient(secret)
-	//saveAsGist(githubClient, "abc.txt", "this is cool")
-	//saveAsGist(githubClient, "abc.txt", "this is fun")
 
 	schemaDecoder = schema.NewDecoder()
 	cuiSessions = map[string]*cui.Session{}
@@ -339,33 +344,28 @@ func main() {
 
 	TMP_DIR, err = getTmpWorkDir()
 	if err != nil {
-		log.Fatal("Failed to initialize tmp_dir: %v", err)
+		log.Fatal(fmt.Sprintf("Failed to initialize tmp_dir: %v", err))
 		return
 	}
 
 	// Echo instance
 	e := echo.New()
-	e.Hook(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		l := len(path) - 1
-		if path != "/" && path[l] == '/' {
-			r.URL.Path = path[:l]
-		}
-	})
-	t := loadTemplates(templatesDir)
-	e.SetRenderer(t)
+	e.Pre(mw.RemoveTrailingSlash())
 
 	// Middleware
 	e.Use(mw.Logger())
 	//e.Use(mw.Recover())
 
+	t := loadTemplates(templatesDir)
+	e.SetRenderer(t)
+
 	// Routes
-	e.Index(filepath.Join(Opts.StaticFilesRoot, "client-app/index.html"))
+	e.File("/", filepath.Join(Opts.StaticFilesRoot, "client-app/index.html"))
 	e.Static("/static/", filepath.Join(Opts.StaticFilesRoot, "client-app/static"))
 
 	// Initial API call
-	e.Get("/secured/ping", func(c *echo.Context) error {
-		user_id := c.Query("user_id")
+	e.Get("/secured/ping", func(c echo.Context) error {
+		user_id := c.QueryParam("user_id")
 		log.Info("user_id: %s", user_id)
 		url := fmt.Sprintf("https://thinkhike.auth0.com/api/v2/users/%s", user_id)
 		client := &http.Client{}
@@ -414,7 +414,7 @@ func main() {
 	// Remaining routes
 	e.Get("/hello", hello)
 	e.Static("/static/cui", staticDir)
-	e.Get("/cui/:ticket_id", func(c *echo.Context) error {
+	e.Get("/cui/:ticket_id", func(c echo.Context) error {
 		ticket_id := c.Param("ticket_id")
 		log.Info("Ticket: %s", ticket_id)
 		session, ok := cuiSessions[ticket_id]
@@ -430,7 +430,7 @@ func main() {
 		log.Info("Session Started? %v", session.Started)
 		return c.Render(http.StatusOK, "cui.html", map[string]interface{}{"Title": "Goonj", "Ticket": session.Ticket})
 	})
-	e.Get("/cui/new", func(c *echo.Context) error {
+	e.Get("/cui/new", func(c echo.Context) error {
 		user := &UserContext{githubClient: NewGitHubClient(THINK_GISTS_KEY)}
 		ticket := cui.NewTicket(tasks, nil)
 		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
@@ -438,7 +438,7 @@ func main() {
 		return c.JSON(http.StatusOK, map[string]string{"ticket_id": ticket.Id})
 	})
 
-	e.Get("/cui/load", func(c *echo.Context) error {
+	e.Get("/cui/load", func(c echo.Context) error {
 		user := &UserContext{githubClient: NewGitHubClient(THINK_GISTS_KEY)}
 		ticket := cui.LoadTicket(tasks, nil)
 		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
@@ -449,5 +449,5 @@ func main() {
 	addCuiHandlers(e)
 
 	// Start server
-	e.Run(fmt.Sprintf(":%s", port))
+	e.Run(standard.New(fmt.Sprintf(":%s", port)))
 }
