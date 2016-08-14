@@ -3,15 +3,12 @@ package cui
 import (
 	"encoding/json"
 	"encoding/xml"
-	"errors"
 	"fmt"
 	"github.com/labstack/gommon/log"
 	"github.com/maddyonline/code"
 	"github.com/maddyonline/goonj/utils"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/russross/blackfriday"
-	"io/ioutil"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -55,135 +52,12 @@ type Session struct {
 	TimeLimit int
 }
 
-func addToTask(tasks map[TaskKey]*Task, ticketId string, input *code.Input, prefix string) *Task {
-	if len(input.Files) < 1 {
-		return nil
-	}
-	task := NewTask()
-	file := input.Files[0]
-	taskName := strings.Join([]string{"task", prefix, "main"}, "-")
-	task.Id = taskName
-	task.CurrentSolution = file.Content
-	task.ProgLang = LanguageFromRunner(input.Language)
-	tasks[TaskKey{ticketId, taskName}] = task
-	return task
-}
-
-func ticketFromTasks(ticketId string, tasks []*Task, opts *Options) *Ticket {
-	if len(tasks) < 1 {
-		return nil
-	}
-	if opts == nil {
-		opts = DefaultOptions()
-	}
-	opts.TicketId = ticketId
-	taskIds := []string{}
-	for _, task := range tasks {
-		taskIds = append(taskIds, task.Id)
-	}
-	opts.TaskNames = taskIds
-	task1 := tasks[0]
-	opts.CurrentTaskName = task1.Id
-	opts.CurrentProgLang = task1.ProgLang
-	opts.Urls["close"] = strings.Replace(opts.Urls["close"], "TICKET_ID", opts.TicketId, -1)
-	opts.Urls["submit_survey"] = strings.Replace(opts.Urls["submit_survey"], "TICKET_ID", opts.TicketId, -1)
-	return &Ticket{Id: ticketId, Options: opts}
-}
-
-func LoadTicket(tasks map[TaskKey]*Task, opts *Options) *Ticket {
-	ticketId := utils.RandId()
-	gistId := "4f1bae999b5fbea43624"
-	evalContext := code.GistFetch(gistId)
-	task := addToTask(tasks, ticketId, evalContext.Test, "test")
-	task.JudgeSolution = evalContext.Solution
-	task.Generator = evalContext.Generator
-	return ticketFromTasks(ticketId, []*Task{task}, opts)
-}
-
-func NewTicket(tasks map[TaskKey]*Task, opts *Options) *Ticket {
-	ticketId := utils.RandId()
-	input := &code.Input{
-		Language: "c",
-		Files: []code.File{
-			code.File{
-				Name:    FileNameForCode("c"),
-				Content: SOLN_TEMPL_CPP,
-			},
-		},
-	}
-	task := addToTask(tasks, ticketId, input, "solution")
-	return ticketFromTasks(ticketId, []*Task{task}, opts)
-}
-
-func NewDraftTicket(tasks map[TaskKey]*Task, opts *Options) *Ticket {
-	ticketId := utils.RandId()
-	gistId := "4f1bae999b5fbea43624"
-	evalContext := code.GistFetch(gistId)
-	t1 := addToTask(tasks, ticketId, evalContext.Generator, "generator")
-	t2 := addToTask(tasks, ticketId, evalContext.Solution, "solution")
-	t3 := addToTask(tasks, ticketId, evalContext.Test, "test")
-
-	t1.SelfSolution = code.MakeInput(t1.ProgLang, t1.Filename, t1.CurrentSolution, code.StdinFile(""))
-	t2.SelfSolution = code.MakeInput(t2.ProgLang, t2.Filename, t2.CurrentSolution, code.StdinFile(""))
-	t3.SelfSolution = code.MakeInput(t3.ProgLang, t3.Filename, t3.CurrentSolution, code.StdinFile(""))
-
-	t2.JudgeSolution = t3.SelfSolution
-	t2.Generator = t1.SelfSolution
-	t3.JudgeSolution = t2.SelfSolution
-	t3.Generator = t1.SelfSolution
-
-	return ticketFromTasks(ticketId, []*Task{t1, t2, t3}, opts)
-
-}
-
-func DefaultOptions() *Options {
-	opts := &Options{
-		TicketId:         "",
-		TimeElapsed:      5,
-		TimeRemaining:    3600,
-		CurrentHumanLang: "en",
-		CurrentProgLang:  "c",
-		CurrentTaskName:  "task1",
-		TaskNames:        []string{"task1", "task2", "task3"},
-		HumanLangList: map[string]HumanLang{
-			"en": HumanLang{Name: "English"},
-			"cn": HumanLang{Name: "\u4e2d\u6587"},
-		},
-		ProgLangList: map[string]ProgLang{
-			"c":   ProgLang{Version: "C", Name: "C"},
-			"cpp": ProgLang{Version: "C++", Name: "C++"},
-			"py2": ProgLang{Version: "py2", Name: "Python 2"},
-			"py3": ProgLang{Version: "py3", Name: "Python 3"},
-			"go":  ProgLang{Version: "go", Name: "Go"},
-			"js":  ProgLang{Version: "js", Name: "Javascript"},
-		},
-		ShowSurvey:  false,
-		ShowWelcome: false,
-		Sequential:  false,
-		SaveOften:   true,
-		Urls: map[string]string{
-			"status":         "/chk/status/",
-			"get_task":       "/c/_get_task/",
-			"submit_survey":  "/surveys/_ajax_submit_candidate_survey/TICKET_ID/",
-			"clock":          "/chk/clock/",
-			"close":          "/c/close/TICKET_ID",
-			"verify":         "/chk/verify/",
-			"judge":          "/chk/judge/",
-			"save":           "/chk/save/",
-			"timeout_action": "/chk/timeout_action/",
-			"final":          "/chk/final/",
-			"start_ticket":   "/c/_start/",
-		},
-	}
-	return opts
-}
-
 type TaskKey struct {
 	TicketId string
 	TaskId   string
 }
 
-type MessageGetTask struct {
+type TaskRequest struct {
 	Task                 string
 	Ticket               string
 	ProgLang             string
@@ -256,14 +130,61 @@ type VerifyStatus struct {
 	//NextTask string     `xml:"next_task"`
 }
 
-func laterReply() *VerifyStatus {
-	resp := &VerifyStatus{
-		Result:  "LATER",
-		Message: "We are still evaluating the solution",
-		Id:      "submission_id: 23e3",
-		Delay:   60,
+func NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
+	ticketId := utils.RandId()
+	task := NewTask()
+	task.Id = taskId
+	opts := DefaultOptions()
+	opts.TicketId = ticketId
+	taskIds := []string{task.Id}
+	opts.TaskNames = taskIds
+	opts.CurrentTaskName = task.Id
+	opts.CurrentProgLang = task.ProgLang
+	opts.Urls["close"] = strings.Replace(opts.Urls["close"], "TICKET_ID", opts.TicketId, -1)
+	opts.Urls["submit_survey"] = strings.Replace(opts.Urls["submit_survey"], "TICKET_ID", opts.TicketId, -1)
+	return &Ticket{Id: ticketId, Options: opts}
+}
+
+func DefaultOptions() *Options {
+	opts := &Options{
+		TicketId:         "",
+		TimeElapsed:      5,
+		TimeRemaining:    3600,
+		CurrentHumanLang: "en",
+		CurrentProgLang:  "c",
+		CurrentTaskName:  "task1",
+		TaskNames:        []string{"task1", "task2", "task3"},
+		HumanLangList: map[string]HumanLang{
+			"en": HumanLang{Name: "English"},
+			"cn": HumanLang{Name: "\u4e2d\u6587"},
+		},
+		ProgLangList: map[string]ProgLang{
+			"c":   ProgLang{Version: "C", Name: "C"},
+			"cpp": ProgLang{Version: "C++", Name: "C++"},
+			"py2": ProgLang{Version: "py2", Name: "Python 2"},
+			"py3": ProgLang{Version: "py3", Name: "Python 3"},
+			"go":  ProgLang{Version: "go", Name: "Go"},
+			"js":  ProgLang{Version: "js", Name: "Javascript"},
+		},
+		ShowSurvey:  false,
+		ShowWelcome: false,
+		Sequential:  false,
+		SaveOften:   true,
+		Urls: map[string]string{
+			"status":         "/chk/status/",
+			"get_task":       "/c/_get_task/",
+			"submit_survey":  "/surveys/_ajax_submit_candidate_survey/TICKET_ID/",
+			"clock":          "/chk/clock/",
+			"close":          "/c/close/TICKET_ID",
+			"verify":         "/chk/verify/",
+			"judge":          "/chk/judge/",
+			"save":           "/chk/save/",
+			"timeout_action": "/chk/timeout_action/",
+			"final":          "/chk/final/",
+			"start_ticket":   "/c/_start/",
+		},
 	}
-	return resp
+	return opts
 }
 
 type Mode int
@@ -287,41 +208,7 @@ func (t Mode) String() string {
 	return val
 }
 
-func FileNameForCode(progLang string) string {
-	ext := map[string]string{
-		"cpp": "cpp",
-		"c":   "cpp",
-		"py2": "py",
-		"py3": "py",
-		"go":  "go",
-		"js":  "js",
-	}[progLang]
-	return fmt.Sprintf("main.%s", ext)
-}
-
-func LanguageForRunner(progLang string) string {
-	return map[string]string{
-		"c":          "cpp",
-		"cpp":        "cpp",
-		"go":         "go",
-		"javascript": "javascript",
-		"js":         "javascript",
-		"py2":        "python",
-		"py3":        "python",
-	}[progLang]
-}
-
-func LanguageFromRunner(progLang string) string {
-	return map[string]string{
-		"c":          "cpp",
-		"cpp":        "cpp",
-		"go":         "go",
-		"javascript": "javascript",
-		"py3":        "python",
-	}[progLang]
-}
-
-func errorResponse(err error, v *VerifyStatus) *VerifyStatus {
+func errorReply(err error, v *VerifyStatus) *VerifyStatus {
 	v.Extra.Compile.OK = 0
 	v.Extra.Compile.Message = fmt.Sprintf("Something went wrong: %v", err)
 	v.Extra.Example.OK = 0
@@ -329,7 +216,19 @@ func errorResponse(err error, v *VerifyStatus) *VerifyStatus {
 	return v
 }
 
-func GetVerifyStatus(runner *code.Runner, task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
+func laterReply() *VerifyStatus {
+	log.Info("laterReply")
+	resp := &VerifyStatus{
+		Result:  "LATER",
+		Message: "We are still evaluating the solution",
+		Id:      "submission_id: 23e3",
+		Delay:   60,
+	}
+	return resp
+}
+
+func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
+	log.Info("In VerifyStatus, mode=%s", mode)
 	//return laterReply()
 	resp := &VerifyStatus{
 		Result: "OK",
@@ -343,58 +242,14 @@ func GetVerifyStatus(runner *code.Runner, task *Task, solnReq *SolutionRequest, 
 			TestData4: Status{1, "OK"},
 		},
 	}
-	if task == nil {
-		return resp
-	}
-	content, err := ioutil.ReadFile(task.Src)
-	if err != nil {
-		return errorResponse(err, resp)
-	}
-	filename := filepath.Base(task.Src)
-	language := LanguageForRunner(task.ProgLang)
-	log.Info("Got testData:=>%s<=", solnReq.TestData0)
-	input := code.MakeInput(language, filename, string(content), code.StdinFile(solnReq.TestData0))
-	if task.SelfSolution == nil {
-		task.SelfSolution = input
-	} else {
-		*task.SelfSolution = *input
-	}
-	log.Info("In VerifyStatus, input: %s", input)
-	log.Info("In mode %s", mode)
+	// errorResponse(err, resp)
 	switch mode {
 	case VERIFY:
-		out, err := runner.Run(input)
-		if err != nil {
-			return errorResponse(err, resp)
-		}
-		log.Info("In VerifyStatus, mode=%v, got stdout=%q, stderr=%q, err=%v", mode, out.Stdout, out.Stderr, err)
-		if out.Stderr != "" || err != nil {
-			err := errors.New(fmt.Sprintf("stderr: %s, err: %v", out.Stderr, err))
-			return errorResponse(err, resp)
-		}
 		resp.Extra.Example.OK = 1
-		resp.Extra.Example.Message = out.Stdout
+		resp.Extra.Example.Message = "All well in verify"
 	case JUDGE, FINAL:
-		log.Info("Judge called")
-		log.Info("In VerifyStatus, mode=%s", mode)
-		mysoln := code.MakeInput(language, filename, string(content), code.StdinFile(""))
-		if task.SelfSolution == nil {
-			task.SelfSolution = mysoln
-		} else {
-			*task.SelfSolution = *mysoln
-		}
-		log.Info("My soln: %#v", mysoln)
-		log.Info("Task generator: %#v", task.Generator)
-		log.Info("Task judge: %#v", task.JudgeSolution)
-		log.Info("Task self: %#v", task.SelfSolution)
-
-		if task.Generator != nil && task.JudgeSolution != nil {
-			result := code.Evaluate(task.Generator, mysoln, task.JudgeSolution, runner)
-			log.Info("Got result of evaluation: %#v", result)
-			resp.Extra.Example.Message = fmt.Sprintf("%#v", result)
-		} else {
-			log.Info("Skipping evaluation: Missing JudgeSoln and/or Generator")
-		}
+		resp.Extra.Example.OK = 1
+		resp.Extra.Example.Message = "All well in judge/final"
 	}
 	return resp
 }
@@ -484,7 +339,7 @@ func HumanLanguageList() string {
 	return string(human_lang_list)
 }
 
-func GetTask(tasks map[TaskKey]*Task, msg *MessageGetTask) *Task {
+func GetTask(tasks map[TaskKey]*Task, msg *TaskRequest) *Task {
 	key := TaskKey{msg.Ticket, msg.Task}
 	task, ok := tasks[key]
 	log.Info(fmt.Sprintf("Looking for %s in tasks: %v", key, ok))
