@@ -9,6 +9,7 @@ import (
 	"github.com/maddyonline/goonj/utils"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/russross/blackfriday"
+	"io/ioutil"
 	"strings"
 	"time"
 )
@@ -134,6 +135,14 @@ func NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
 	ticketId := utils.RandId()
 	task := NewTask()
 	task.Id = taskId
+	desc, err := ioutil.ReadFile(fmt.Sprintf("../../%s/README.md", taskId))
+	if err != nil {
+		log.Printf("%v", err)
+		return nil
+	}
+	task.Description = string(getDescFromMarkdown(desc))
+	tasks[TaskKey{ticketId, taskId}] = task
+	log.Infof("%#v", tasks)
 	opts := DefaultOptions()
 	opts.TicketId = ticketId
 	taskIds := []string{task.Id}

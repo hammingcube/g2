@@ -12,7 +12,8 @@ function showStartCodingLink(data) {
 
 function createNewTicket(problemId) {
     $.ajax({
-      url: "/cui/new/" + problemId,
+      url: "/cui/new",
+      data: {'problem_id': problemId},
       beforeSend: function(xhr) {
       },
       error: function(err) {

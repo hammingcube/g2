@@ -186,9 +186,12 @@ func main() {
 	e.SetRenderer(t)
 
 	// CUI entry point
-	e.Get("/cui/new/:problem_id", func(c echo.Context) error {
-		problem_id := c.Param("problem_id")
+	e.Get("/cui/new", func(c echo.Context) error {
+		problem_id := c.QueryParam("problem_id")
 		log.Info(fmt.Sprintf("Got problem_id: %s", problem_id))
+		if problem_id == "" {
+			return ErrNotFound{}
+		}
 		ticket := cui.NewTicket(tasks, problem_id)
 		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
 		return c.JSON(http.StatusOK, map[string]string{"ticket_id": ticket.Id, "problem_id": problem_id})
