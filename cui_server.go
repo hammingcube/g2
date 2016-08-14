@@ -118,22 +118,26 @@ func getTmpWorkDir() (string, error) {
 	return utils.CreateDirIfReqd(filepath.Join(u.HomeDir, "goonj-workdir"))
 }
 
-func saveSolution(c echo.Context) (*cui.Task, *cui.SolutionRequest) {
-	solnReq := &cui.SolutionRequest{
+func getSolutionRequest(c echo.Context) *cui.SolutionRequest {
+	return &cui.SolutionRequest{
 		Ticket:    c.FormValue("ticket"),
 		Task:      c.FormValue("task"),
 		ProgLang:  c.FormValue("prg_lang"),
 		Solution:  c.FormValue("solution"),
 		TestData0: c.FormValue("test_data0"),
 	}
-	log.Info("%s %s: Form: %#v", c.Request().Method, c.Request().URL, solnReq)
+}
+
+func saveSolution(c echo.Context) (*cui.Task, *cui.SolutionRequest) {
+	solnReq := getSolutionRequest(c)
+	log.Info(fmt.Sprintf("solnReq: %#v", solnReq))
 	task, ok := tasks[cui.TaskKey{solnReq.Ticket, solnReq.Task}]
 	if !ok {
 		return nil, nil
 	}
 
-	log.Info("%s %s: Updating task.ProgLang from %s to %s", c.Request().Method, c.Request().URL, task.ProgLang, solnReq.ProgLang)
-	log.Info("%s %s: Updating task.CurrentSolution from %q to %q", c.Request().Method, c.Request().URL, task.CurrentSolution, solnReq.Solution)
+	log.Info(fmt.Sprintf("%s %s: Updating task.ProgLang from %s to %s", c.Request().Method, c.Request().URL, task.ProgLang, solnReq.ProgLang))
+	log.Info(fmt.Sprintf("%s %s: Updating task.CurrentSolution from %q to %q", c.Request().Method, c.Request().URL, task.CurrentSolution, solnReq.Solution))
 
 	task.ProgLang = solnReq.ProgLang
 	task.CurrentSolution = solnReq.Solution
@@ -193,9 +197,6 @@ func addCuiHandlers(e *echo.Echo) {
 		if err := c.Bind(clkReq); err != nil {
 			return err
 		}
-		// c.Request().P
-		// clkReq := &cui.ClockRequest{}
-		// schemaDecoder.Decode(clkReq, c.Request().Form)
 		log.Info(fmt.Sprintf("Clock Request: %v", clkReq))
 		oldlimit := time.Duration(clkReq.OldTimeLimit) * time.Second
 		resp := cui.GetClock(cuiSessions, clkReq)
@@ -206,31 +207,30 @@ func addCuiHandlers(e *echo.Echo) {
 	})
 
 	chk.Post("/save", func(c echo.Context) error {
-		saveSolution(c)
+		solnReq := getSolutionRequest(c)
+		log.Info(fmt.Sprintf("/verify solnReq: %#v", solnReq))
 		return c.String(http.StatusOK, "Finished saving")
 	})
-
-	chk.Post("/verify", func(c echo.Context) error {
-		c.Request().FormValue("task")
-		//log.Info("/verify: %#v", c.Request().Form)
-		task, solnReq := saveSolution(c)
-		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, task, solnReq, cui.VERIFY))
-	})
-
-	chk.Post("/judge", func(c echo.Context) error {
-		c.FormValue("task")
-		//log.Info("/judge: %#v", c.Request().Form)
-		task, solnReq := saveSolution(c)
-		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, task, solnReq, cui.JUDGE))
-	})
-
-	chk.Post("/final", func(c echo.Context) error {
-		log.Info("In /final")
-		c.FormValue("task")
-		//log.Info("/final: %#v", c.Request().Form)
-		task, solnReq := saveSolution(c)
-		return c.XML(http.StatusOK, cui.GetVerifyStatus(runner, task, solnReq, cui.FINAL))
-	})
+	type Action struct {
+		Path string
+		Mode cui.Mode
+	}
+	for _, action := range []Action{
+		{"/verify", cui.VERIFY},
+		{"/judge", cui.JUDGE},
+		{"/final", cui.FINAL},
+	} {
+		handler := func(action Action) echo.HandlerFunc {
+			return func(c echo.Context) error {
+				solnReq := getSolutionRequest(c)
+				log.Info(action.Path, "\t", "solnReq: ", solnReq)
+				resp := cui.GetVerifyStatus(nil, nil, solnReq, action.Mode)
+				log.Info(action.Path, "\t", "resp: ", resp)
+				return c.XML(http.StatusOK, resp)
+			}
+		}(action)
+		chk.Post(action.Path, handler)
+	}
 
 	chk.Post("/status", func(c echo.Context) error {
 		c.FormValue("task")
@@ -332,13 +332,7 @@ func main() {
 		log.Fatal(fmt.Sprintf("Need github secret to proceed"))
 		return
 	}
-	AUTH0_TOKEN, ok := env["AUTH0_TOKEN"]
-	if !ok {
-		log.Fatal(fmt.Sprintf("Need AUTH0 token to proceed"))
-		return
-	}
 
-	schemaDecoder = schema.NewDecoder()
 	cuiSessions = map[string]*cui.Session{}
 	tasks = map[cui.TaskKey]*cui.Task{}
 
@@ -363,54 +357,6 @@ func main() {
 	e.File("/", filepath.Join(Opts.StaticFilesRoot, "client-app/index.html"))
 	e.Static("/static/", filepath.Join(Opts.StaticFilesRoot, "client-app/static"))
 
-	// Initial API call
-	e.Get("/secured/ping", func(c echo.Context) error {
-		user_id := c.QueryParam("user_id")
-		log.Info("user_id: %s", user_id)
-		url := fmt.Sprintf("https://thinkhike.auth0.com/api/v2/users/%s", user_id)
-		client := &http.Client{}
-		req, err := http.NewRequest("GET", url, nil)
-		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", AUTH0_TOKEN))
-		q := req.URL.Query()
-		q.Add("fields", "identities")
-		req.URL.RawQuery = q.Encode()
-		resp, err := client.Do(req)
-		log.Info("Request: %v", resp.StatusCode)
-		errorStr := ""
-		if err != nil {
-			errorStr = fmt.Sprintf("Error : %s", err)
-			log.Error("Req error: %v", err)
-		}
-		defer resp.Body.Close()
-		type Auth0Data struct {
-			Identities []struct {
-				AccessToken *string `json:"access_token"`
-			}
-		}
-		expected := &struct {
-			Ticket string `json:"ticket_id"`
-			Error  string
-			Data   *Auth0Data
-		}{
-			Error: "",
-			Data:  &Auth0Data{},
-		}
-		err = json.NewDecoder(resp.Body).Decode(expected.Data)
-		if err != nil {
-			log.Error("Decode error: %v", err)
-			errorStr += fmt.Sprintf(", %s", err)
-		}
-		expected.Error = errorStr
-		log.Info("Got: access token: %s", *expected.Data.Identities[0].AccessToken)
-		USER_GH_TOKEN := *expected.Data.Identities[0].AccessToken
-		user := &UserContext{githubClient: NewGitHubClient(USER_GH_TOKEN)}
-		ticket := cui.NewTicket(tasks, nil)
-		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
-		userContexts[ticket.Id] = user
-		expected.Ticket = ticket.Id
-		return c.JSON(http.StatusOK, expected)
-	})
-
 	// Remaining routes
 	e.Get("/hello", hello)
 	e.Static("/static/cui", staticDir)
@@ -433,14 +379,6 @@ func main() {
 	e.Get("/cui/new", func(c echo.Context) error {
 		user := &UserContext{githubClient: NewGitHubClient(THINK_GISTS_KEY)}
 		ticket := cui.NewTicket(tasks, nil)
-		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
-		userContexts[ticket.Id] = user
-		return c.JSON(http.StatusOK, map[string]string{"ticket_id": ticket.Id})
-	})
-
-	e.Get("/cui/load", func(c echo.Context) error {
-		user := &UserContext{githubClient: NewGitHubClient(THINK_GISTS_KEY)}
-		ticket := cui.LoadTicket(tasks, nil)
 		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
 		userContexts[ticket.Id] = user
 		return c.JSON(http.StatusOK, map[string]string{"ticket_id": ticket.Id})

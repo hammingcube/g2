@@ -487,7 +487,7 @@ func HumanLanguageList() string {
 func GetTask(tasks map[TaskKey]*Task, msg *MessageGetTask) *Task {
 	key := TaskKey{msg.Ticket, msg.Task}
 	task, ok := tasks[key]
-	log.Info("Looking for %s in tasks: %v", key, ok)
+	log.Info(fmt.Sprintf("Looking for %s in tasks: %v", key, ok))
 
 	if !ok || task == nil {
 		log.Info("Serving task based on nil request")
@@ -506,12 +506,12 @@ func GetTask(tasks map[TaskKey]*Task, msg *MessageGetTask) *Task {
 		}
 		tasks[key] = task
 	}
-	log.Info("PREFER-SERVER-LANG: %v", msg.PreferServerProgLang)
+	log.Info(fmt.Sprintf("PREFER-SERVER-LANG: %v", msg.PreferServerProgLang))
 	if msg.PreferServerProgLang {
-		log.Info("Updating task %s prog-lang form %s to %s", task.Id, task.ProgLang, msg.ProgLang)
+		log.Info(fmt.Sprintf("Updating task %s prog-lang form %s to %s", task.Id, task.ProgLang, msg.ProgLang))
 		task.ProgLang = msg.ProgLang
 	}
-	log.Info("Updating task %s prog-lang form %s to %s", task.Id, task.HumanLang, msg.HumanLang)
+	log.Info(fmt.Sprintf("Updating task %s prog-lang form %s to %s", task.Id, task.HumanLang, msg.HumanLang))
 	task.HumanLang = msg.HumanLang
 	return task
 }
