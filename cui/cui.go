@@ -1,18 +1,39 @@
 package cui
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/docker/engine-api/client"
 	"github.com/labstack/gommon/log"
-	"github.com/maddyonline/code"
-	"github.com/maddyonline/goonj/utils"
+	"github.com/maddyonline/umpire"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/russross/blackfriday"
+	"golang.org/x/net/context"
 	"io/ioutil"
+	"os"
+	"path/filepath"
+
 	"strings"
 	"time"
 )
+
+func RandId() string {
+	size := 32 // change the length of the generated random string here
+
+	rb := make([]byte, size)
+	_, err := rand.Read(rb)
+
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	rs := base64.URLEncoding.EncodeToString(rb)
+
+	return rs
+}
 
 type HumanLang struct {
 	Name string `json:"name_in_itself"`
@@ -67,23 +88,20 @@ type TaskRequest struct {
 }
 
 type Task struct {
-	XMLName          xml.Name    `xml:"response"`
-	Id               string      `xml:"id" json:"id"`
-	Status           string      `xml:"task_status" json: "task_status"`
-	Description      string      `xml:"task_description"`
-	Type             string      `xml:"task_type"`
-	SolutionTemplate string      `xml:"solution_template"`
-	CurrentSolution  string      `xml:"current_solution"`
-	ExampleInput     string      `xml:"example_input"`
-	ProgLangList     string      `xml:"prg_lang_list"`
-	HumanLangList    string      `xml:"human_lang_list"`
-	ProgLang         string      `xml:"prg_lang"`
-	HumanLang        string      `xml:"human_lang"`
-	Src              string      `xml:"-"`
-	Filename         string      `xml:"-"`
-	Generator        *code.Input `xml:"-"`
-	JudgeSolution    *code.Input `xml:"-"`
-	SelfSolution     *code.Input `xml:"-"`
+	XMLName          xml.Name `xml:"response"`
+	Id               string   `xml:"id" json:"id"`
+	Status           string   `xml:"task_status" json: "task_status"`
+	Description      string   `xml:"task_description"`
+	Type             string   `xml:"task_type"`
+	SolutionTemplate string   `xml:"solution_template"`
+	CurrentSolution  string   `xml:"current_solution"`
+	ExampleInput     string   `xml:"example_input"`
+	ProgLangList     string   `xml:"prg_lang_list"`
+	HumanLangList    string   `xml:"human_lang_list"`
+	ProgLang         string   `xml:"prg_lang"`
+	HumanLang        string   `xml:"human_lang"`
+	Src              string   `xml:"-"`
+	Filename         string   `xml:"-"`
 }
 
 type ClockRequest struct {
@@ -132,7 +150,7 @@ type VerifyStatus struct {
 }
 
 func NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
-	ticketId := utils.RandId()
+	ticketId := RandId()
 	task := NewTask()
 	task.Id = taskId
 	desc, err := ioutil.ReadFile(fmt.Sprintf("../../%s/README.md", taskId))
@@ -239,6 +257,32 @@ func laterReply() *VerifyStatus {
 func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
 	log.Info("In VerifyStatus, mode=%s", mode)
 	//return laterReply()
+	cli, err := client.NewEnvClient()
+	if err != nil {
+		log.Fatalf("%v", err)
+		return nil
+	}
+	problemsDir, err := filepath.Abs("../../")
+	if err != nil {
+		log.Fatalf("%v", err)
+		return nil
+	}
+	u := &umpire.Umpire{cli, problemsDir}
+	payload := &umpire.Payload{
+		Problem:  &umpire.Problem{task.Id},
+		Language: "cpp",
+		Files: []*umpire.InMemoryFile{
+			&umpire.InMemoryFile{
+				Name:    "main.cpp",
+				Content: task.CurrentSolution,
+			},
+		},
+		Stdin: "hello\nhi\n",
+	}
+	err = u.RunAndJudge(context.Background(), payload, os.Stdout, os.Stderr)
+	if err != nil {
+		return errorReply(err, &VerifyStatus{})
+	}
 	resp := &VerifyStatus{
 		Result: "OK",
 		Extra: MainStatus{
