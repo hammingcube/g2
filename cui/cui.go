@@ -11,11 +11,8 @@ import (
 	"github.com/maddyonline/umpire"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/russross/blackfriday"
-	"golang.org/x/net/context"
 	"io/ioutil"
-	"os"
 	"path/filepath"
-
 	"strings"
 	"time"
 )
@@ -277,12 +274,10 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 				Content: task.CurrentSolution,
 			},
 		},
-		Stdin: "hello\nhi\n",
+		Stdin: solnReq.TestData0,
 	}
-	err = u.RunAndJudge(context.Background(), payload, os.Stdout, os.Stderr)
-	if err != nil {
-		return errorReply(err, &VerifyStatus{})
-	}
+	out := umpire.RunDefault(u, payload)
+	msg, _ := json.Marshal(out)
 	resp := &VerifyStatus{
 		Result: "OK",
 		Extra: MainStatus{
@@ -299,7 +294,7 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 	switch mode {
 	case VERIFY:
 		resp.Extra.Example.OK = 1
-		resp.Extra.Example.Message = "All well in verify"
+		resp.Extra.Example.Message = string(msg)
 	case JUDGE, FINAL:
 		resp.Extra.Example.OK = 1
 		resp.Extra.Example.Message = "All well in judge/final"
