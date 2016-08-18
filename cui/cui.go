@@ -169,6 +169,24 @@ func NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
 	return &Ticket{Id: ticketId, Options: opts}
 }
 
+func DefaultHumanLangList() map[string]HumanLang {
+	return map[string]HumanLang{
+		"en": HumanLang{Name: "English"},
+		"cn": HumanLang{Name: "\u4e2d\u6587"},
+	}
+}
+
+func DefaultProgLangList() map[string]ProgLang {
+	return map[string]ProgLang{
+		"c":   ProgLang{Version: "C", Name: "C"},
+		"cpp": ProgLang{Version: "C++", Name: "C++"},
+		"py2": ProgLang{Version: "py2", Name: "Python 2"},
+		"py3": ProgLang{Version: "py3", Name: "Python 3"},
+		"go":  ProgLang{Version: "go", Name: "Go"},
+		"js":  ProgLang{Version: "js", Name: "Javascript"},
+	}
+}
+
 func DefaultOptions() *Options {
 	opts := &Options{
 		TicketId:         "",
@@ -178,22 +196,12 @@ func DefaultOptions() *Options {
 		CurrentProgLang:  "c",
 		CurrentTaskName:  "task1",
 		TaskNames:        []string{"task1", "task2", "task3"},
-		HumanLangList: map[string]HumanLang{
-			"en": HumanLang{Name: "English"},
-			"cn": HumanLang{Name: "\u4e2d\u6587"},
-		},
-		ProgLangList: map[string]ProgLang{
-			"c":   ProgLang{Version: "C", Name: "C"},
-			"cpp": ProgLang{Version: "C++", Name: "C++"},
-			"py2": ProgLang{Version: "py2", Name: "Python 2"},
-			"py3": ProgLang{Version: "py3", Name: "Python 3"},
-			"go":  ProgLang{Version: "go", Name: "Go"},
-			"js":  ProgLang{Version: "js", Name: "Javascript"},
-		},
-		ShowSurvey:  false,
-		ShowWelcome: false,
-		Sequential:  false,
-		SaveOften:   true,
+		HumanLangList:    DefaultHumanLangList(),
+		ProgLangList:     DefaultProgLangList(),
+		ShowSurvey:       false,
+		ShowWelcome:      false,
+		Sequential:       false,
+		SaveOften:        true,
 		Urls: map[string]string{
 			"status":         "/chk/status/",
 			"get_task":       "/c/_get_task/",
@@ -378,7 +386,13 @@ func NewTask() *Task {
 }
 
 func ProgrammingLanguageList() string {
-	prg_lang_list, _ := json.Marshal([]string{"c", "cpp", "py2", "py3", "go", "js"})
+	list := DefaultProgLangList()
+	keys := []string{}
+	for k := range list {
+		keys = append(keys, k)
+	}
+	log.Printf("Loading following languages: %v", keys)
+	prg_lang_list, _ := json.Marshal(keys)
 	return string(prg_lang_list)
 }
 
