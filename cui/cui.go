@@ -247,12 +247,12 @@ func errorReply(err error, v *VerifyStatus) *VerifyStatus {
 	return v
 }
 
-func LaterReply() *VerifyStatus {
+func LaterReply(key string) *VerifyStatus {
 	log.Info("laterReply")
 	resp := &VerifyStatus{
 		Result:  "LATER",
 		Message: "We are still evaluating the solution",
-		Id:      "submission_id: 23e3",
+		Id:      key,
 		Delay:   60,
 	}
 	return resp
@@ -318,30 +318,33 @@ func defaultVerifyStatus() *VerifyStatus {
 
 func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
 	log.Info("In VerifyStatus, mode=%s", mode)
-	verifyKey := fmt.Sprintf("%s/%s", solnReq.Ticket, RandId(4))
+	verifyKey := RandId(4)
 	agent := getUmpireAgent()
 	payload := getPayload(task, solnReq)
-	done := make(chan interface{})
+	done := make(chan *VerifyStatus)
 	go func() {
+		var out *umpire.Response
 		switch mode {
 		case VERIFY:
-			done <- umpire.RunDefault(agent, payload)
+			out = umpire.RunDefault(agent, payload)
 		case JUDGE, FINAL:
-			done <- umpire.JudgeDefault(agent, payload)
+			out = umpire.JudgeDefault(agent, payload)
 		}
+		resp := defaultVerifyStatus()
+		msg, _ := json.Marshal(out)
+		resp.Extra.Example.Message = string(msg)
+		Results.Lock()
+		Results.Store[fmt.Sprintf("%s/%s", solnReq.Ticket, verifyKey)] = resp
+		Results.Unlock()
+		done <- resp
 	}()
-	resp := defaultVerifyStatus()
 	for {
 		select {
-		case out := <-done:
-			msg, _ := json.Marshal(out)
-			resp.Extra.Example.Message = string(msg)
-			Results.Lock()
-			Results.Store[verifyKey] = resp
-			Results.Unlock()
+		case resp := <-done:
 			return resp
-		case <-time.After(5 * time.Second):
-			return LaterReply()
+		case <-time.After(1 * time.Second):
+			go func() { <-done }()
+			return LaterReply(verifyKey)
 		}
 	}
 }
