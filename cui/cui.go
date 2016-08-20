@@ -332,7 +332,10 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 		}
 		resp := defaultVerifyStatus()
 		msg, _ := json.Marshal(out)
-		resp.Extra.Example.Message = string(msg)
+		resp.Extra.Example.Message = out.Stdout + "\n" + out.Stderr + "\n" + out.Details + "\n" + string(msg)
+		if out.Status == umpire.Fail {
+			resp.Extra.Example.OK = 0
+		}
 		Results.Lock()
 		Results.Store[fmt.Sprintf("%s/%s", solnReq.Ticket, verifyKey)] = resp
 		Results.Unlock()
