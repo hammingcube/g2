@@ -14,12 +14,11 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
-func RandId() string {
-	size := 32 // change the length of the generated random string here
-
+func RandId(size int) string {
 	rb := make([]byte, size)
 	_, err := rand.Read(rb)
 
@@ -147,7 +146,7 @@ type VerifyStatus struct {
 }
 
 func NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
-	ticketId := RandId()
+	ticketId := RandId(32)
 	task := NewTask()
 	task.Id = taskId
 	desc, err := ioutil.ReadFile(fmt.Sprintf("../../%s/README.md", taskId))
@@ -248,7 +247,7 @@ func errorReply(err error, v *VerifyStatus) *VerifyStatus {
 	return v
 }
 
-func laterReply() *VerifyStatus {
+func LaterReply() *VerifyStatus {
 	log.Info("laterReply")
 	resp := &VerifyStatus{
 		Result:  "LATER",
@@ -259,9 +258,21 @@ func laterReply() *VerifyStatus {
 	return resp
 }
 
-func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
-	log.Info("In VerifyStatus, mode=%s", mode)
-	//return laterReply()
+type ResultStore struct {
+	Store map[string]*VerifyStatus
+	*sync.Mutex
+}
+
+var Results = &ResultStore{
+	Store: map[string]*VerifyStatus{},
+	Mutex: &sync.Mutex{},
+}
+var localAgent *umpire.Agent
+
+func getUmpireAgent() *umpire.Agent {
+	if localAgent != nil {
+		return localAgent
+	}
 	cli, err := client.NewEnvClient()
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -272,8 +283,12 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 		log.Fatalf("%v", err)
 		return nil
 	}
-	u := &umpire.Umpire{cli, problemsDir}
-	payload := &umpire.Payload{
+	localAgent = &umpire.Agent{cli, problemsDir}
+	return localAgent
+}
+
+func getPayload(task *Task, solnReq *SolutionRequest) *umpire.Payload {
+	return &umpire.Payload{
 		Problem:  &umpire.Problem{task.Id},
 		Language: "cpp",
 		Files: []*umpire.InMemoryFile{
@@ -284,9 +299,10 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 		},
 		Stdin: solnReq.TestData0,
 	}
-	out := umpire.RunDefault(u, payload)
-	msg, _ := json.Marshal(out)
-	resp := &VerifyStatus{
+}
+
+func defaultVerifyStatus() *VerifyStatus {
+	return &VerifyStatus{
 		Result: "OK",
 		Extra: MainStatus{
 			Compile:   Status{1, "The solution compiled flawlessly."},
@@ -298,16 +314,36 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 			TestData4: Status{1, "OK"},
 		},
 	}
-	// errorResponse(err, resp)
-	switch mode {
-	case VERIFY:
-		resp.Extra.Example.OK = 1
-		resp.Extra.Example.Message = string(msg)
-	case JUDGE, FINAL:
-		resp.Extra.Example.OK = 1
-		resp.Extra.Example.Message = "All well in judge/final"
+}
+
+func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
+	log.Info("In VerifyStatus, mode=%s", mode)
+	verifyKey := fmt.Sprintf("%s/%s", solnReq.Ticket, RandId(4))
+	agent := getUmpireAgent()
+	payload := getPayload(task, solnReq)
+	done := make(chan interface{})
+	go func() {
+		switch mode {
+		case VERIFY:
+			done <- umpire.RunDefault(agent, payload)
+		case JUDGE, FINAL:
+			done <- umpire.JudgeDefault(agent, payload)
+		}
+	}()
+	resp := defaultVerifyStatus()
+	for {
+		select {
+		case out := <-done:
+			msg, _ := json.Marshal(out)
+			resp.Extra.Example.Message = string(msg)
+			Results.Lock()
+			Results.Store[verifyKey] = resp
+			Results.Unlock()
+			return resp
+		case <-time.After(5 * time.Second):
+			return LaterReply()
+		}
 	}
-	return resp
 }
 
 func GetClock(sessions map[string]*Session, clkReq *ClockRequest) *ClockResponse {

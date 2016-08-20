@@ -143,9 +143,16 @@ func addCuiHandlers(e *echo.Echo) {
 	}
 
 	chk.Post("/status", func(c echo.Context) error {
-		c.FormValue("task")
-		//log.Info("/status: %#v", c.Request().Form)
-		return c.XML(http.StatusOK, cui.GetVerifyStatus(nil, nil, cui.VERIFY))
+		ticket, id := c.FormValue("ticket"), c.FormValue("id")
+		key := fmt.Sprintf("%s/%s", ticket, id)
+		var resp *cui.VerifyStatus
+		cui.Results.Lock()
+		resp, ok := cui.Results.Store[key]
+		cui.Results.Unlock()
+		if !ok {
+			resp = cui.LaterReply()
+		}
+		return c.XML(http.StatusOK, resp)
 	})
 }
 
