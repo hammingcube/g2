@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/engine/standard"
 	mw "github.com/labstack/echo/middleware"
 	"github.com/labstack/gommon/log"
 	"github.com/maddyonline/g2/cui"
+	"github.com/maddyonline/g2/frontend"
 	"html/template"
 	"io"
 	"net/http"
@@ -183,8 +185,15 @@ func main() {
 	})
 
 	// Frontend
-	e.File("/", filepath.Join(rootDir, "client-app/index.html"))
-	e.Static("/static/", filepath.Join(rootDir, "client-app/static"))
+	e.Get("/", func(c echo.Context) error {
+		b, err := frontend.Index("./frontend")
+		if err != nil {
+			return err
+		}
+		return c.ServeContent(bytes.NewReader(b), "index.html", time.Now())
+	})
+	//filepath.Join(rootDir, "frontend/index.html"))
+	e.Static("/static/", filepath.Join(rootDir, "frontend/static"))
 
 	// CUI static resources
 	e.Static("/static/cui", staticDir)
