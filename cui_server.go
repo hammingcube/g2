@@ -3,16 +3,21 @@ package main
 import (
 	"bytes"
 	"fmt"
+	docker_client "github.com/docker/engine-api/client"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/engine/standard"
 	mw "github.com/labstack/echo/middleware"
 	"github.com/labstack/gommon/log"
 	"github.com/maddyonline/g2/cui"
 	"github.com/maddyonline/g2/frontend"
+	"github.com/maddyonline/problems"
+	"github.com/maddyonline/umpire"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -37,6 +42,7 @@ func loadTemplates(templatesDir string) *Template {
 
 var tasks = map[cui.TaskKey]*cui.Task{}
 var cuiSessions = map[string]*cui.Session{}
+var problemsList []*problems.Problem
 
 func getSolutionRequest(c echo.Context) *cui.SolutionRequest {
 	return &cui.SolutionRequest{
@@ -88,7 +94,7 @@ func addCuiHandlers(e *echo.Echo) {
 		return c.String(http.StatusOK, "Started")
 	})
 	c.Post("/_get_task", func(c echo.Context) error {
-		return c.XML(http.StatusOK, cui.GetTask(tasks, getTaskRequest(c)))
+		return c.XML(http.StatusOK, cli.GetTask(tasks, getTaskRequest(c)))
 	})
 	c.Get("/close/:ticket_id", func(c echo.Context) error {
 		log.Info("Params: ->%s<-, ->%s<-", c.P(0), c.P(1))
@@ -103,7 +109,7 @@ func addCuiHandlers(e *echo.Echo) {
 		}
 		log.Info(fmt.Sprintf("Clock Request: %v", clkReq))
 		oldlimit := time.Duration(clkReq.OldTimeLimit) * time.Second
-		resp := cui.GetClock(cuiSessions, clkReq)
+		resp := cli.GetClock(cuiSessions, clkReq)
 		newlimit := time.Duration(resp.NewTimeLimit) * time.Second
 		log.Info(fmt.Sprintf("Clock Request: OldLimit=%s", oldlimit))
 		log.Info(fmt.Sprintf("Clock Response: NewLimit=%s", newlimit))
@@ -136,7 +142,7 @@ func addCuiHandlers(e *echo.Echo) {
 				if err != nil {
 					return err
 				}
-				resp := cui.GetVerifyStatus(task, solnReq, action.Mode)
+				resp := cli.GetVerifyStatus(task, solnReq, action.Mode)
 				log.Info(action.Path, "\t", "resp: ", resp)
 				return c.XML(http.StatusOK, resp)
 			}
@@ -157,9 +163,81 @@ func addCuiHandlers(e *echo.Echo) {
 	})
 }
 
+func refreshProblemsList(problemsDir string, tmpl *template.Template, cli *cui.Client) {
+	probsList, err := problems.GetList(problemsDir, ioutil.Discard)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	index, err := frontend.Index(tmpl, probsList)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	cli.Mutex.Lock()
+	oldCount := len(cli.ProbsList)
+	cli.ProbsList = probsList
+	cli.Index = index
+	cli.LastUpdated = time.Now()
+	log.Infof("Updated problems list: %d new problems", len(cli.ProbsList)-oldCount)
+	cli.Mutex.Unlock()
+}
+
 const PORT = "3000"
 
+var cli *cui.Client
+
 func main() {
+	problemsDir, err := filepath.Abs("../../maddyonline/problems")
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	dcli, err := docker_client.NewEnvClient()
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	umpireAgent := &umpire.Agent{dcli, problemsDir}
+
+	probsList, err := problems.GetList(problemsDir, ioutil.Discard)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	tmpl := template.Must(template.ParseFiles(
+		"frontend/templates/problems_list.tpl",
+		"frontend/templates/main.tpl"))
+	index, err := frontend.Index(tmpl, probsList)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	cli = &cui.Client{
+		Agent:       umpireAgent,
+		ProbsList:   probsList,
+		Index:       index,
+		LastUpdated: time.Now(),
+		Mutex:       &sync.Mutex{},
+	}
+
+	ticker := time.NewTicker(1 * time.Minute)
+	quit := make(chan struct{})
+	defer func() { quit <- struct{}{} }()
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				refreshProblemsList(problemsDir, tmpl, cli)
+			case <-quit:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
 	rootDir, err := filepath.Abs(".")
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -186,11 +264,7 @@ func main() {
 
 	// Frontend
 	e.Get("/", func(c echo.Context) error {
-		b, err := frontend.Index("./frontend")
-		if err != nil {
-			return err
-		}
-		return c.ServeContent(bytes.NewReader(b), "index.html", time.Now())
+		return c.ServeContent(bytes.NewReader(cli.Index), "index.html", cli.LastUpdated)
 	})
 	//filepath.Join(rootDir, "frontend/index.html"))
 	e.Static("/static/", filepath.Join(rootDir, "frontend/static"))
@@ -207,7 +281,7 @@ func main() {
 		if problem_id == "" {
 			return ErrNotFound{}
 		}
-		ticket := cui.NewTicket(tasks, problem_id)
+		ticket := cli.NewTicket(tasks, problem_id)
 		cuiSessions[ticket.Id] = &cui.Session{TimeLimit: 3600, Created: time.Now(), Ticket: ticket}
 		return c.JSON(http.StatusOK, map[string]string{"ticket_id": ticket.Id, "problem_id": problem_id})
 	})
@@ -225,7 +299,7 @@ func main() {
 			session.Started = true
 		}
 		log.Info("Session Started? %v", session.Started)
-		return c.Render(http.StatusOK, "cui.html", map[string]interface{}{"Title": "Goonj", "Ticket": session.Ticket})
+		return c.Render(http.StatusOK, "cui.html", map[string]interface{}{"Title": "Goonj2", "Ticket": session.Ticket})
 	})
 
 	// Remaining CUI handlers

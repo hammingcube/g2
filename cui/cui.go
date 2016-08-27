@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"github.com/docker/engine-api/client"
 	"github.com/labstack/gommon/log"
+	"github.com/maddyonline/problems"
 	"github.com/maddyonline/umpire"
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/russross/blackfriday"
-	"io/ioutil"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +27,14 @@ func RandId(size int) string {
 	rs := base64.URLEncoding.EncodeToString(rb)
 
 	return rs
+}
+
+type Client struct {
+	Agent       *umpire.Agent
+	ProbsList   map[string]*problems.Problem
+	Index       []byte
+	LastUpdated time.Time
+	*sync.Mutex
 }
 
 type HumanLang struct {
@@ -84,20 +90,21 @@ type TaskRequest struct {
 }
 
 type Task struct {
-	XMLName          xml.Name `xml:"response"`
-	Id               string   `xml:"id" json:"id"`
-	Status           string   `xml:"task_status" json: "task_status"`
-	Description      string   `xml:"task_description"`
-	Type             string   `xml:"task_type"`
-	SolutionTemplate string   `xml:"solution_template"`
-	CurrentSolution  string   `xml:"current_solution"`
-	ExampleInput     string   `xml:"example_input"`
-	ProgLangList     string   `xml:"prg_lang_list"`
-	HumanLangList    string   `xml:"human_lang_list"`
-	ProgLang         string   `xml:"prg_lang"`
-	HumanLang        string   `xml:"human_lang"`
-	Src              string   `xml:"-"`
-	Filename         string   `xml:"-"`
+	XMLName          xml.Name          `xml:"response"`
+	Id               string            `xml:"id" json:"id"`
+	Status           string            `xml:"task_status" json: "task_status"`
+	Description      string            `xml:"task_description"`
+	Type             string            `xml:"task_type"`
+	SolutionTemplate string            `xml:"solution_template"`
+	CurrentSolution  string            `xml:"current_solution"`
+	ExampleInput     string            `xml:"example_input"`
+	ProgLangList     string            `xml:"prg_lang_list"`
+	HumanLangList    string            `xml:"human_lang_list"`
+	ProgLang         string            `xml:"prg_lang"`
+	HumanLang        string            `xml:"human_lang"`
+	Src              string            `xml:"-"`
+	Filename         string            `xml:"-"`
+	Templates        map[string]string `xml:"-"`
 }
 
 type ClockRequest struct {
@@ -145,16 +152,24 @@ type VerifyStatus struct {
 	//NextTask string     `xml:"next_task"`
 }
 
-func NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
+var CUI_LANG_TO_MD = map[string]string{
+	"cpp": "cpp",
+	"py2": "python",
+	"py3": "python",
+}
+
+func (client *Client) NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
 	ticketId := RandId(32)
 	task := NewTask()
 	task.Id = taskId
-	desc, err := ioutil.ReadFile(fmt.Sprintf("../../%s/README.md", taskId))
-	if err != nil {
-		log.Printf("%v", err)
-		return nil
-	}
-	task.Description = string(getDescFromMarkdown(desc))
+	prob := client.ProbsList[taskId]
+
+	log.Infof("prob: %+v", prob)
+
+	task.Description = string(getDescFromMarkdown([]byte(prob.FullDesc)))
+	task.Templates = prob.Templates
+	task.SolutionTemplate = prob.Templates[CUI_LANG_TO_MD[task.ProgLang]]
+	task.CurrentSolution = prob.Templates[CUI_LANG_TO_MD[task.ProgLang]]
 	tasks[TaskKey{ticketId, taskId}] = task
 	log.Infof("%#v", tasks)
 	opts := DefaultOptions()
@@ -267,25 +282,6 @@ var Results = &ResultStore{
 	Store: map[string]*VerifyStatus{},
 	Mutex: &sync.Mutex{},
 }
-var localAgent *umpire.Agent
-
-func getUmpireAgent() *umpire.Agent {
-	if localAgent != nil {
-		return localAgent
-	}
-	cli, err := client.NewEnvClient()
-	if err != nil {
-		log.Fatalf("%v", err)
-		return nil
-	}
-	problemsDir, err := filepath.Abs("../../")
-	if err != nil {
-		log.Fatalf("%v", err)
-		return nil
-	}
-	localAgent = &umpire.Agent{cli, problemsDir}
-	return localAgent
-}
 
 func getPayload(task *Task, solnReq *SolutionRequest) *umpire.Payload {
 	return &umpire.Payload{
@@ -316,10 +312,11 @@ func defaultVerifyStatus() *VerifyStatus {
 	}
 }
 
-func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
-	log.Info("In VerifyStatus, mode=%s", mode)
+func (client *Client) GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifyStatus {
+	log.Infof("In VerifyStatus, mode=%s", mode)
 	verifyKey := RandId(4)
-	agent := getUmpireAgent()
+	log.Infof("Client: %+v", client)
+	agent := client.Agent
 	payload := getPayload(task, solnReq)
 	done := make(chan *VerifyStatus)
 	go func() {
@@ -352,7 +349,7 @@ func GetVerifyStatus(task *Task, solnReq *SolutionRequest, mode Mode) *VerifySta
 	}
 }
 
-func GetClock(sessions map[string]*Session, clkReq *ClockRequest) *ClockResponse {
+func (client *Client) GetClock(sessions map[string]*Session, clkReq *ClockRequest) *ClockResponse {
 	session, ok := sessions[clkReq.TicketId]
 	if !ok {
 		return &ClockResponse{Result: "OK", NewTimeLimit: clkReq.OldTimeLimit}
@@ -443,7 +440,7 @@ func HumanLanguageList() string {
 	return string(human_lang_list)
 }
 
-func GetTask(tasks map[TaskKey]*Task, msg *TaskRequest) *Task {
+func (client *Client) GetTask(tasks map[TaskKey]*Task, msg *TaskRequest) *Task {
 	key := TaskKey{msg.Ticket, msg.Task}
 	task, ok := tasks[key]
 	log.Info(fmt.Sprintf("Looking for %s in tasks: %v", key, ok))
@@ -472,5 +469,6 @@ func GetTask(tasks map[TaskKey]*Task, msg *TaskRequest) *Task {
 	}
 	log.Info(fmt.Sprintf("Updating task %s prog-lang form %s to %s", task.Id, task.HumanLang, msg.HumanLang))
 	task.HumanLang = msg.HumanLang
+	task.SolutionTemplate = task.Templates[CUI_LANG_TO_MD[task.ProgLang]]
 	return task
 }

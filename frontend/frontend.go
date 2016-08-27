@@ -4,29 +4,28 @@ import (
 	"bytes"
 	"github.com/maddyonline/problems"
 	"html/template"
-	"io/ioutil"
 	"log"
-	"path/filepath"
+	"sort"
 )
 
-func Index(rootdir string) ([]byte, error) {
-	//{{range .Items}}
-	dirname, err := filepath.Abs(filepath.Join(rootdir, "../../problems"))
-	if err != nil {
-		log.Fatal(err)
-		return nil, err
+func sortedList(m map[string]*problems.Problem) []*problems.Problem {
+	mk := make([]string, len(m))
+	i := 0
+	for k, _ := range m {
+		mk[i] = k
+		i++
 	}
-	problems, err := problems.GetList(dirname, ioutil.Discard)
-	if err != nil {
-		log.Fatal(err)
-		return nil, err
+	sort.Strings(mk)
+	ans := []*problems.Problem{}
+	for _, k := range mk {
+		ans = append(ans, m[k])
 	}
-	tmpl := template.Must(template.ParseFiles(
-		filepath.Join(rootdir, "templates/problems_list.tpl"),
-		filepath.Join(rootdir, "templates/main.tpl"),
-	))
+	return ans
+}
+
+func Index(tmpl *template.Template, probsList map[string]*problems.Problem) ([]byte, error) {
 	var b bytes.Buffer
-	err = tmpl.ExecuteTemplate(&b, "main", problems["problems"])
+	err := tmpl.ExecuteTemplate(&b, "main", sortedList(probsList))
 	if err != nil {
 		log.Fatal(err)
 		return nil, err

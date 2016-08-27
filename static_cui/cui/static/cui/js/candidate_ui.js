@@ -345,7 +345,7 @@ function CandidateUi(options)
         if (self.task.type == 'bugfixing')
             $('#reset_btn').show();
         else
-            $('#reset_btn').hide();
+            $('#reset_btn').show();
 
         if (self.options.sequential)
             $('.task-list').addClass('disabled');
@@ -930,6 +930,8 @@ function CandidateUi(options)
         self.task.prg_lang = prg_lang;
         self.task.human_lang = human_lang;
         self.task.saved_solution = current_solution;
+
+        Log.debug("candidate reload task, solution_template: " + solution_template);
 
         $('#task_description').html(task_description);
         if (!self.options.demo && !self.options.cert) self.simpleCopyProtection();
