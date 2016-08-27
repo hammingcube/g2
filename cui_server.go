@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	docker_client "github.com/docker/engine-api/client"
 	"github.com/labstack/echo"
@@ -188,6 +189,11 @@ const PORT = "3000"
 var cli *cui.Client
 
 func main() {
+	var port string
+	flag.StringVar(&port, "port", PORT, "port")
+	flag.Parse()
+	log.Info(fmt.Sprintf("Using Port=%s", port))
+
 	problemsDir, err := filepath.Abs("../../maddyonline/problems")
 	if err != nil {
 		log.Fatal(err)
@@ -243,13 +249,8 @@ func main() {
 		log.Fatalf("%v", err)
 		return
 	}
-	port := PORT
 	staticDir := filepath.Join(rootDir, "static_cui/cui/static/cui")
 	templatesDir := filepath.Join(rootDir, "static_cui/cui/templates")
-
-	log.Info(fmt.Sprintf("Using Port=%s", port))
-	log.Info(fmt.Sprintf("Using Static Directory=%s", staticDir))
-	log.Info(fmt.Sprintf("Using Templates Directory=%s", templatesDir))
 
 	// Echo instance
 	e := echo.New()
