@@ -158,6 +158,12 @@ var CUI_LANG_TO_MD = map[string]string{
 	"py3": "python",
 }
 
+var CUI_LANG_TO_BACKEND = map[string]string{
+	"cpp": "cpp",
+	"py2": "python",
+	"py3": "python",
+}
+
 func (client *Client) NewTicket(tasks map[TaskKey]*Task, taskId string) *Ticket {
 	ticketId := RandId(32)
 	task := NewTask()
@@ -284,12 +290,16 @@ var Results = &ResultStore{
 }
 
 func getPayload(task *Task, solnReq *SolutionRequest) *umpire.Payload {
+	lang := CUI_LANG_TO_BACKEND[task.ProgLang]
 	return &umpire.Payload{
 		Problem:  &umpire.Problem{task.Id},
-		Language: "cpp",
+		Language: lang,
 		Files: []*umpire.InMemoryFile{
 			&umpire.InMemoryFile{
-				Name:    "main.cpp",
+				Name: map[string]string{
+					"cpp":    "main.cpp",
+					"python": "main.py",
+				}[lang],
 				Content: task.CurrentSolution,
 			},
 		},
